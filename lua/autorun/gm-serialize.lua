@@ -10,261 +10,237 @@
 ]]--
 
 serialize = {
-    VERSION = "1.0.0"
+    VERSION = "2.2.3"
 }
 
-local FORMAT_APPENDAGE_START = string.char(1)
-local FORMAT_APPENDAGE_INSERT = string.char(16)
-local FORMAT_APPENDAGE_TERM = string.char(29)
-local FORMAT_APPENDAGE_UNIT = string.char(31)
+local FORMAT_APPENDAGE_START	= string.char(1)
+local FORMAT_APPENDAGE_INSERT	= string.char(16)
+local FORMAT_APPENDAGE_TERM		= string.char(29)
+local FORMAT_APPENDAGE_UNIT		= string.char(31)
 
-local FORMAT_TYPES_HANDLERS = {}
-local FORMAT_TYPES_LOOKUP = {}
+local FORMAT_TYPE_ANGLE		= "a"
+local FORMAT_TYPE_COLOR		= "c"
+local FORMAT_TYPE_ENTITY	= "e"
+local FORMAT_TYPE_FALSE		= "f"
+local FORMAT_TYPE_NIL		= string.char(0)
+local FORMAT_TYPE_TABLE		= "t"
+local FORMAT_TYPE_TRUE		= "r"
+local FORMAT_TYPE_VECTOR	= "v"
 
-FORMAT_TYPES_HANDLERS["ANGLE"] = {
-    Store = "a",
-    Serialize = function (value)
-        return value.pitch..FORMAT_APPENDAGE_UNIT..value.yaw..FORMAT_APPENDAGE_UNIT..value.roll
-    end,
+local EncodeType = nil
+function EncodeType(value)
+    local vtype = type(value)
+    if vtype == "Angle" then
+        return FORMAT_TYPE_ANGLE..value.pitch..FORMAT_APPENDAGE_UNIT..value.yaw..FORMAT_APPENDAGE_UNIT..value.roll
 
-    Deserialize = function (value)
-        local values = string.Explode(FORMAT_APPENDAGE_UNIT, value)
-        return Angle(tonumber(values[1]), tonumber(values[2]), tonumber(values[3]))
-    end
-}
+    elseif vtype == "boolean" then
+        return value and FORMAT_TYPE_TRUE or FORMAT_TYPE_FALSE
 
-FORMAT_TYPES_HANDLERS["BOOLEAN"] = {
-    Store = "b",
-    Serialize = function (value)
-        return value and "1" or "0"
-    end,
-
-    Deserialize = function (value)
-        return value == "1"
-    end
-}
-
-FORMAT_TYPES_HANDLERS["COLOR"] = {
-    Store = "c",
-    Serialize = function (value)
+    elseif vtype == "table" and value.r and value.g and value.b then
         if value.a then
-            return string.upper(string.format("%02x%02x%02x%02x", value.r, value.g, value.b, value.a))
+            return FORMAT_TYPE_COLOR..string.format("%02x%02x%02x%02x", value.r, value.g, value.b, value.a)
 
         else
-            return string.upper(string.format("%02x%02x%02x", value.r, value.g, value.b))
+            return FORMAT_TYPE_COLOR..string.format("%02x%02x%02x", value.r, value.g, value.b)
         end
-    end,
 
-    Deserialize = function (value)
+    elseif vtype == "Entity" or vtype == "Vehicle" or vtype == "Weapon" or vtype == "NPC" or vtype == "Player" or vtype == "NextBot" then
+        return FORMAT_TYPE_ENTITY..(IsValid(value) and value:EntIndex() or "-1")
+
+    elseif vtype == "nil" then
+        return FORMAT_TYPE_NIL
+
+    elseif vtype == "number" then
+        return value
+
+    elseif vtype == "string" then
+        return value
+
+    elseif vtype == "table" then
+        local built = ""
+        local last = 0
+
+        for key, vvalue in pairs(value) do
+            if type(key) == "number" then
+                local nex = last + 1
+                if key == nex then
+                    built = built..FORMAT_APPENDAGE_INSERT..EncodeType(vvalue)
+                    last = nex
+
+                    continue
+                end
+            end
+
+            built = built..FORMAT_APPENDAGE_START..EncodeType(key)..FORMAT_APPENDAGE_START..EncodeType(vvalue)
+        end
+
+        return FORMAT_TYPE_TABLE..built..FORMAT_APPENDAGE_TERM
+
+    elseif vtype == "Vector" then
+        return FORMAT_TYPE_VECTOR..value.x..FORMAT_APPENDAGE_UNIT..value.y..FORMAT_APPENDAGE_UNIT..value.z
+    end
+
+    error("GM-Serialize: Variable type not supported")
+end
+
+function serialize.Encode(value)
+    return FORMAT_APPENDAGE_START..EncodeType(value)
+end
+
+function ParseString(str)
+    local ret = {}
+    local built = ""
+    local built_size = 0
+    local position = 1
+    local size = #str
+    local inserted = false
+    local index = 1
+
+    while position <= size do
+        local chr = str[position]
+        local insert = chr == FORMAT_APPENDAGE_INSERT
+        if chr == FORMAT_APPENDAGE_START or insert then
+            if built_size > 0 then
+                ret[index] = {
+                    built,
+                    inserted,
+                    false
+                }
+
+                index = index + 1
+            end
+
+            built = ""
+            built_size = 0
+            inserted = insert
+
+        else
+            local term = chr == FORMAT_APPENDAGE_TERM
+            if size == position or term then
+                if built_size > 0 then
+                    ret[index] = {
+                        built,
+                        inserted,
+                        term
+                    }
+
+                    index = index + 1
+
+                    built = ""
+                    built_size = 0
+                end
+
+            else
+                built = built..chr
+                built_size = built_size + 1
+            end
+        end
+
+        position = position + 1
+    end
+
+    return ret
+end
+
+local DecodeType = nil
+local tindex = nil
+function DecodeType(str, var, var2)
+    local etype = str[1]
+    local enumber = tonumber(str)
+    if etype == FORMAT_TYPE_ANGLE then
+        local value = string.sub(str, 2, #str)
+        local values = string.Explode(FORMAT_APPENDAGE_UNIT, value)
+        return Angle(tonumber(values[1]), tonumber(values[2]), tonumber(values[3]))
+
+    elseif etype == FORMAT_TYPE_TRUE then 
+        return true
+
+    elseif etype == FORMAT_TYPE_FALSE then 
+        return false
+
+    elseif etype == FORMAT_TYPE_COLOR then
+        local value = string.sub(str, 2, #str)
+
         local red = tonumber(string.sub(value, 1, 2), 16)
         local green = tonumber(string.sub(value, 3, 4), 16)
         local blue = tonumber(string.sub(value, 5, 6), 16)
+
         local alpha = nil
         if #value == 8 then
             alpha = tonumber(string.sub(value, 7, 8), 16)
         end
 
         return Color(red, green, blue, alpha)
-    end
-}
 
-FORMAT_TYPES_HANDLERS["ENTITY"] = {
-    Store = "e",
-    Serialize = function (value)
-        return IsValid(value) and tostring(value:EntIndex()) or "-1"
-    end,
+    elseif etype == FORMAT_TYPE_ENTITY then
+        local value = tonumber(string.sub(str, 2, #str))
+        return Entity(value)
 
-    Deserialize = function (value)
-        return Entity(value) 
-    end
-}
+    elseif etype == FORMAT_TYPE_NIL then
+        return nil
 
-FORMAT_TYPES_HANDLERS["NUMBER"] = {
-    Store = "n",
-    Serialize = function (value)
-        return tostring(value)
-    end,
+    elseif etype == FORMAT_TYPE_TABLE then
+        local ret = {}
+        local tbl = var or ParseString(string.sub(str, 2, #str))
+        local size = var2 or #tbl
 
-    Deserialize = function (value)
-        return tonumber(value)
-    end
-}
+        while tindex < size do
+            local key = tbl[tindex]
+            tindex = tindex + 1
 
-FORMAT_TYPES_HANDLERS["NIL"] = {
-    Store = string.char(0),
-    Serialize = function (value) return "" end,
-    Deserialize = function (value) return nil end
-}
+            local kentry = key[1]
+            local kvalue = nil
 
-FORMAT_TYPES_HANDLERS["STRING"] = {
-    Store = "s",
-    Serialize = function (value)
-        return value
-    end,
-
-    Deserialize = function (value)
-        return value
-    end
-}
-
-local function ParseString(value)
-    local ret = {}
-    local offset = 1
-    for entry in string.gmatch(value, "["..FORMAT_APPENDAGE_START..FORMAT_APPENDAGE_INSERT.."]+".."([%w%s%p"..FORMAT_APPENDAGE_UNIT.."]+)") do
-        local start, last = string.find(value, entry, offset)
-        offset = last + 1
-
-        local term = string.sub(value, offset, offset) == FORMAT_APPENDAGE_TERM
-        if term then
-            offset = offset + 1
-        end
-
-        local position = start - 1
-        table.insert(ret, {
-            Entry = entry,
-            Insert = string.sub(value, position, position) == FORMAT_APPENDAGE_INSERT,
-            Terminator = term
-        })
-    end
-
-    return ret
-end
-
-local function GetData(str)
-    local stype = string.sub(str, 1, 1)
-    local data = FORMAT_TYPES_LOOKUP[stype]
-    if data then
-        return data, stype
-    end
-
-    error("GM-Serialize: Encoded type not supported")
-end
-
-FORMAT_TYPES_HANDLERS["TABLE"] = {
-    Store = "t",
-    Terminator = true,
-    Serialize = function (value)
-        local built = ""
-        local last = 0
-        for key, vvalue in pairs(value) do
-            if type(key) == "number" then
-                local nex = last + 1
-                if key == nex then
-                    built = built..string.gsub(serialize.Encode(vvalue), FORMAT_APPENDAGE_START, FORMAT_APPENDAGE_INSERT, 1)
-                    last = nex
-
-                else
-                    built = built..serialize.Encode(key)..serialize.Encode(vvalue)
-                end
+            if kentry[1] == "t" then
+                kvalue = DecodeType("t", tbl, size)
 
             else
-                built = built..serialize.Encode(key)..serialize.Encode(vvalue)
+                kvalue = DecodeType(kentry)
             end
-        end
 
-        return built
-    end,
+            if key[2] then
+                ret[#ret + 1] = kvalue
 
-    Deserialize = function (value, tbl)
-        local ret = {}
-        local tbl = tbl or ParseString(value)
-        local size = #tbl
-
-        while size > 0 do
-            local key = table.remove(tbl, 1)
-            size = size - 1
-
-            local kdat, ktype = GetData(key.Entry)
-            local kraw = string.sub(key.Entry, 2, #key.Entry)
-            if key.Insert then
-                if ktype == "t" then
-                    ret[#ret + 1] = kdat.Deserialize(nil, tbl)
-                    size = #tbl
-
-                else
-                    ret[#ret + 1] = kdat.Deserialize(kraw)
-                end
-
-                if key.Terminator then
+                if key[3] then
                     break
                 end
 
-                continue
-            end
-
-            local value = table.remove(tbl, 1)
-            size = size + 1
-
-            local vdat, vtype = GetData(value.Entry)
-            local vraw = string.sub(value.Entry, 2, #value.Entry)
-            if vtype == "t" then
-                ret[kdat.Deserialize(kraw)] = vdat.Deserialize(nil, tbl)
-                size = #tbl
-
             else
-                ret[kdat.Deserialize(kraw)] = vdat.Deserialize(vraw)
-            end
+                local value = tbl[tindex]
+                tindex = tindex + 1
 
-            if value.Terminator then
-                break
+                local ventry = value[1]
+                if ventry[1] == "t" then
+                    ret[kvalue] = DecodeType("t", tbl, size)
+
+                else
+                    ret[kvalue] = DecodeType(ventry)
+                end
+
+                if value[3] then
+                    break
+                end
             end
         end
 
         return ret
-    end
-}
 
-FORMAT_TYPES_HANDLERS["VECTOR"] = {
-    Store = "v",
-    Serialize = function (value)
-        return value.x..FORMAT_APPENDAGE_UNIT..value.y..FORMAT_APPENDAGE_UNIT..value.z
-    end,
-
-    Deserialize = function (value)
+    elseif etype == FORMAT_TYPE_VECTOR then
+        local value = string.sub(str, 2, #str)
         local values = string.Explode(FORMAT_APPENDAGE_UNIT, value)
         return Vector(tonumber(values[1]), tonumber(values[2]), tonumber(values[3]))
-    end
-}
 
-local ENTITY = FORMAT_TYPES_HANDLERS["ENTITY"]
-FORMAT_TYPES_HANDLERS["VEHICLE"] = ENTITY
-FORMAT_TYPES_HANDLERS["WEAPON"] = ENTITY
-FORMAT_TYPES_HANDLERS["NPC"] = ENTITY
-FORMAT_TYPES_HANDLERS["PLAYER"] = ENTITY
-FORMAT_TYPES_HANDLERS["NEXTBOT"] = ENTITY
-
-for _, tbl in pairs(FORMAT_TYPES_HANDLERS) do
-    FORMAT_TYPES_LOOKUP[tbl.Store] = tbl
-end
-
-function serialize.Encode(value)
-    local vtype = type(value)
-    local data = nil
-    if vtype == "table" then
-        if IsColor(value) then
-            data = FORMAT_TYPES_HANDLERS.COLOR
-
-        else
-            data = FORMAT_TYPES_HANDLERS.TABLE
-        end
+    elseif enumber ~= nil then
+        return enumber
     end
 
-    data = data or FORMAT_TYPES_HANDLERS[string.upper(vtype)]
-    if data then
-        return FORMAT_APPENDAGE_START..data.Store..data.Serialize(value)..(data.Terminator and FORMAT_APPENDAGE_TERM or "")
-    end
-
-    error("GM-Serialize: Variable type not supported")
+    return str
 end
 
 function serialize.Decode(str)
     if string.sub(str, 1, 1) == FORMAT_APPENDAGE_START then
-        local data = FORMAT_TYPES_LOOKUP[string.sub(str, 2, 2)]
-        if data then
-            return data.Deserialize(string.sub(str, 3, #str))
-        end
-
-        error("GM-Serialize: Encoded type not supported")
+        tindex = 1
+        return DecodeType(string.sub(str, 2, #str))
     end
 
     error("GM-Serialize: Invalid data format")
