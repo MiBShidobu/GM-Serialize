@@ -10,7 +10,7 @@
 ]]--
 
 serialize = {
-    VERSION = "2.2.3"
+    VERSION = "2.3.3"
 }
 
 local FORMAT_APPENDAGE_START	= string.char(1)
@@ -23,6 +23,7 @@ local FORMAT_TYPE_COLOR		= "c"
 local FORMAT_TYPE_ENTITY	= "e"
 local FORMAT_TYPE_FALSE		= "f"
 local FORMAT_TYPE_NIL		= string.char(0)
+local FORMAT_TYPE_STRING	= "s"
 local FORMAT_TYPE_TABLE		= "t"
 local FORMAT_TYPE_TRUE		= "r"
 local FORMAT_TYPE_VECTOR	= "v"
@@ -54,7 +55,7 @@ function EncodeType(value)
         return value
 
     elseif vtype == "string" then
-        return value
+        return FORMAT_TYPE_STRING..value
 
     elseif vtype == "table" then
         local built = ""
@@ -152,12 +153,6 @@ function DecodeType(str, var, var2)
         local values = string.Explode(FORMAT_APPENDAGE_UNIT, value)
         return Angle(tonumber(values[1]), tonumber(values[2]), tonumber(values[3]))
 
-    elseif etype == FORMAT_TYPE_TRUE then 
-        return true
-
-    elseif etype == FORMAT_TYPE_FALSE then 
-        return false
-
     elseif etype == FORMAT_TYPE_COLOR then
         local value = string.sub(str, 2, #str)
 
@@ -176,8 +171,14 @@ function DecodeType(str, var, var2)
         local value = tonumber(string.sub(str, 2, #str))
         return Entity(value)
 
+    elseif etype == FORMAT_TYPE_FALSE then 
+        return false
+
     elseif etype == FORMAT_TYPE_NIL then
         return nil
+
+    elseif etype == FORMAT_TYPE_STRING then
+        return string.sub(str, 2, #str)
 
     elseif etype == FORMAT_TYPE_TABLE then
         local ret = {}
@@ -225,6 +226,9 @@ function DecodeType(str, var, var2)
 
         return ret
 
+    elseif etype == FORMAT_TYPE_TRUE then 
+        return true
+
     elseif etype == FORMAT_TYPE_VECTOR then
         local value = string.sub(str, 2, #str)
         local values = string.Explode(FORMAT_APPENDAGE_UNIT, value)
@@ -234,7 +238,7 @@ function DecodeType(str, var, var2)
         return enumber
     end
 
-    return str
+    error("GM-Serialize: Encoded type not supported")
 end
 
 function serialize.Decode(str)
